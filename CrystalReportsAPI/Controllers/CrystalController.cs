@@ -12,46 +12,68 @@ namespace CrystalReportsAPI.Controllers
     [RoutePrefix("api/crystal")]
     public class CrystalController : ApiController
     {
-        /// <summary>
-        /// Genera un documento PDF a partir de un archivo .rpt de Crystal Reports.
-        /// </summary>
-        /// <param name="idOrden">ID o número de la orden que requiere el reporte.</param>
-        [HttpPost]
-        [Route("generar-pdf/{idOrden}")]
+        [HttpGet]
+        [Route("OrdenDeCompra/{idOrden}")]
         public HttpResponseMessage GenerarReportePdf(int idOrden)
         {
+            // Inicializar el reporte fuera del try para poder manejarlo con seguridad
             ReportDocument rptDoc = new ReportDocument();
 
             try
             {
-                // 1. Obtener la ruta física de la carpeta "Reportes" en la raíz del proyecto
                 string rutaBase = AppDomain.CurrentDomain.BaseDirectory;
                 string rutaReporte = Path.Combine(rutaBase, "Reportes", "ORDCOMP-V4.rpt");
 
-                // Verificar que el archivo .rpt realmente exista en el servidor
                 if (!File.Exists(rutaReporte))
                 {
                     return Request.CreateErrorResponse(HttpStatusCode.NotFound, $"No se encontró la plantilla del reporte en la ruta: {rutaReporte}");
                 }
 
-                // 2. Cargar el reporte en el motor de Crystal
+                // 1. Cargar el reporte
                 rptDoc.Load(rutaReporte);
 
-                // 3. [OPCIONAL] Si tu reporte se conecta directo a SQL Server, descomenta y llena esta línea:
-                // rptDoc.SetDatabaseLogon("tu_usuario", "tu_password", "tu_servidor", "tu_base_datos");
+                // 2. Definir parámetros de conexión a SAP HANA
+                string dbName = "CENTRAL_PRUEBASAP10"; // Asegúrate de que este nombre sea el correcto en tu HANA
 
-                // 4. Inyectar el parámetro que pide tu reporte (Asegúrate de que se llame igual en el .rpt)
-                rptDoc.SetParameterValue("IdOrden", idOrden);
+                ConnectionInfo hanaConnection = new ConnectionInfo
+                {
+                    ServerName = "192.168.104.232:30013",
+                    DatabaseName = dbName,
+                    UserID = "System",
+                    Password = "Sapb1234",
+                    Type = ConnectionInfoType.SQL
+                };
 
-                // 5. Exportar el reporte directamente a un flujo de memoria (Stream) en formato PDF
-                // Esto evita tener que guardar archivos basura en el disco duro del servidor
+                // 3. Aplicar conexión al reporte principal
+                foreach (Table table in rptDoc.Database.Tables)
+                {
+                    TableLogOnInfo logOnInfo = table.LogOnInfo;
+                    logOnInfo.ConnectionInfo = hanaConnection;
+                    table.ApplyLogOnInfo(logOnInfo);
+                    // QUITAMOS la línea de table.Location
+                }
+
+                // 4. Aplicar conexión a todos los SUBREPORTES
+                foreach (ReportDocument subReporte in rptDoc.Subreports)
+                {
+                    foreach (Table table in subReporte.Database.Tables)
+                    {
+                        TableLogOnInfo logOnInfo = table.LogOnInfo;
+                        logOnInfo.ConnectionInfo = hanaConnection;
+                        table.ApplyLogOnInfo(logOnInfo);
+                        // QUITAMOS la línea de table.Location
+                    }
+                }
+
+                // 5. Inyectar el parámetro forzándolo a Int64 (BigInt en HANA)
+                rptDoc.SetParameterValue("DocKey@", Convert.ToInt64(idOrden));
+
+                // 6. Exportar a Stream de memoria
                 Stream pdfStream = rptDoc.ExportToStream(ExportFormatType.PortableDocFormat);
 
-                // 6. Construir la respuesta HTTP con el archivo binario
+                // 7. Construir respuesta HTTP de descarga de archivos
                 HttpResponseMessage response = new HttpResponseMessage(HttpStatusCode.OK);
                 response.Content = new StreamContent(pdfStream);
-
-                // 7. Configurar las cabeceras para que el navegador y Swagger entiendan que es un PDF descargable
                 response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/pdf");
                 response.Content.Headers.ContentDisposition = new ContentDispositionHeaderValue("attachment")
                 {
@@ -62,19 +84,15 @@ namespace CrystalReportsAPI.Controllers
             }
             catch (Exception ex)
             {
-                // Si ocurre un error, devolvemos un estado 500 con el mensaje detallado
-                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, $"Error al procesar Crystal Reports: {ex.Message}");
-            }
-            finally
-            {
-                // 8. REGLA DE ORO: Liberar los objetos COM de Crystal para evitar fugas de memoria en el pool de IIS
+                // Si hay error, nos aseguramos de limpiar el objeto corrupto
                 if (rptDoc != null)
                 {
                     rptDoc.Close();
                     rptDoc.Dispose();
-                    GC.Collect(); // Ayuda a limpiar la memoria de inmediato
                 }
+                return Request.CreateErrorResponse(HttpStatusCode.InternalServerError, $"Error al procesar Crystal Reports: {ex.Message}");
             }
+            // NOTA: Se eliminó el bloque 'finally' de liberación inmediata para no interrumpir el flujo del Stream.
         }
     }
 }
