@@ -22,7 +22,7 @@ namespace CrystalReportsAPI.Controllers
             try
             {
                 string rutaBase = AppDomain.CurrentDomain.BaseDirectory;
-                string rutaReporte = Path.Combine(rutaBase, "Reportes", "ORDCOMP-V4.rpt");
+                string rutaReporte = Path.Combine(rutaBase, "Reportes", "FCO-03.rpt");
 
                 if (!File.Exists(rutaReporte))
                 {
