@@ -21,7 +21,6 @@ namespace CrystalReportsAPI.Controllers
 
         public HttpResponseMessage GenerarReporteCCP(string UUID, [FromUri] string empresa = null)
         {
-            // Validamos si el usuario olvidó poner el parámetro ?empresa=...
             if (string.IsNullOrEmpty(empresa))
             {
                 return Request.CreateErrorResponse(HttpStatusCode.BadRequest, "Falta el parámetro 'empresa' en la URL. Ejemplo: ?empresa=EMPRESA1");
@@ -44,7 +43,6 @@ namespace CrystalReportsAPI.Controllers
                 }
                 // Cargar el reporte
                 rptDoc.Load(rutaReporte);
-                // 3. Recuperar credenciales genéricas del Web.config
                 ConnectionInfo hanaConnection = new ConnectionInfo
                 {
                     ServerName = ConfigurationManager.AppSettings["Hana_Server"],
@@ -53,7 +51,7 @@ namespace CrystalReportsAPI.Controllers
                     Password = ConfigurationManager.AppSettings["Hana_Password"],
                     Type = ConnectionInfoType.SQL
                 };
-                // 4. Aplicar conexión al reporte principal
+
                 foreach (Table table in rptDoc.Database.Tables)
                 {
                     TableLogOnInfo logOnInfo = table.LogOnInfo;
@@ -64,7 +62,7 @@ namespace CrystalReportsAPI.Controllers
                         table.Location = $"{dbName}.{table.Name}";
                     }
                 }
-                // 5. Aplicar conexión a todos los SUBREPORTES
+
                 foreach (ReportDocument subReporte in rptDoc.Subreports)
                 {
                     foreach (Table table in subReporte.Database.Tables)
@@ -80,16 +78,11 @@ namespace CrystalReportsAPI.Controllers
                     }
                 }
 
-                // Inyectar el parámetro de la orden
                 rptDoc.SetParameterValue("UUID@", UUID.ToString());
-
-                // NUEVO: Inyectar el nombre de la base de datos para que el Command lo use
                 rptDoc.SetParameterValue("EsquemaBD", dbName);
 
-                // Exportar a Stream
                 Stream pdfStream = rptDoc.ExportToStream(ExportFormatType.PortableDocFormat);
 
-                // Construir respuesta HTTP
                 HttpResponseMessage response = new HttpResponseMessage(HttpStatusCode.OK);
                 response.Content = new StreamContent(pdfStream);
                 response.Content.Headers.ContentType = new MediaTypeHeaderValue("application/pdf");
